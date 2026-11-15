@@ -1,3 +1,4 @@
+
 /**
  * @file book_controller.js
  * @brief Controlador para la gestión documental, carga y borrado de archivos PDF.
@@ -9,13 +10,14 @@
 
 const fileHelper = require('../utils/file_helper/file_helper');
 const bookRepository = require('../repositories/book_repository');
+const auditRepository = require('../repositories/audit_repository');
 const i18n = require('../utils/i18n/i18n'); // Inyección del gestor de idiomas
 
 /**
  * @class BookController
  * @brief Administra la interacción del cliente con su biblioteca privada.
  */
-class BookController 
+class BookController
 {
     /**
      * @brief Sube un libro PDF y guarda sus metadatos en la base de datos.
@@ -23,13 +25,13 @@ class BookController
      * @param {Object} res - Respuesta HTTP.
      * @param {Function} next - Función para delegar errores al Global Error Handler.
      */
-    async uploadBook(req, res, next) 
+    async uploadBook(req, res, next)
     {
-        try 
+        try
         {
             const { title, author, category_id, category, pages } = req.body;
             let targetCategoryId = parseInt(category_id || category, 10);
-            if (isNaN(targetCategoryId)) 
+            if (isNaN(targetCategoryId))
             {
                 targetCategoryId = 1;
             }
@@ -50,11 +52,11 @@ class BookController
 
             const message = i18n.getMessage('CT_BOOK_UPLOAD_SUCCESS');
             res.status(201).json({ message, id: insertId, path: filePath });
-        } 
-        catch (error) 
+        }
+        catch (error)
         {
             // Regla de Integridad: Limpieza física preventiva si la base de datos falla
-            if (req.file) 
+            if (req.file)
             {
                 fileHelper.deleteFile(`/uploads/${req.file.filename}`);
             }
@@ -70,17 +72,16 @@ class BookController
      */
     async getMyBooks(req, res, next)
     {
-        try 
+        try
         {
             const books = await bookRepository.findByUserId(req.userId);
             res.json(books);
-        } 
-        catch (error) 
+        }
+        catch (error)
         {
             next(error);
         }
     }
-
 
     /**
      * @brief Actualiza los metadatos de un libro existente.
@@ -115,7 +116,6 @@ class BookController
                 pages: Number(pages)
             });
 
-       
             res.json({
                 message: 'Metadatos actualizados correctamente.'
             });
@@ -126,24 +126,23 @@ class BookController
         }
     }
 
-
     /**
      * @brief Elimina un documento específico validando previamente la propiedad del mismo.
      * @param {Object} req - Petición HTTP.
      * @param {Object} res - Respuesta HTTP.
      * @param {Function} next - Función para delegar errores.
      */
-    async deleteBook(req, res, next) 
+    async deleteBook(req, res, next)
     {
-        try 
+        try
         {
             const { id } = req.params;
             const userId = req.userId;
 
             // Obtener información del libro para validar propiedad y conocer ruta física
             const book = await bookRepository.findById(id, userId);
-            
-            if (!book) 
+
+            if (!book)
             {
                 const message = i18n.getMessage('CT_BOOK_NOT_FOUND');
                 return res.status(404).json({ message });
@@ -152,9 +151,19 @@ class BookController
             // Eliminar registro en base de datos
             await bookRepository.delete(id, userId);
 
+            // Registrar la auditoria sin esperar a que finalice la escritura
+            void auditRepository.create({
+                user_id: userId,
+                action: 'DELETE_BOOK',
+                target: String(id),
+                ip_address: req.ip || null
+            }).catch(error => {
+                console.error('[Audit] No se pudo registrar DELETE_BOOK:', error);
+            });
+
             // Eliminar archivo físico en disco de forma síncrona
-            fileHelper.deleteFile(book.file_path); 
-            
+            fileHelper.deleteFile(book.file_path);
+
             const message = i18n.getMessage('CT_BOOK_DELETED_SUCCESS');
             res.json({ message });
         }
